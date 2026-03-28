@@ -1,0 +1,3 @@
+import os, glob, numpy as np; import inference; inference.load_models(); data_dir = r'c:\Kuliah\Semester 4\Final Project\money-talks\data';
+for d in ['idr_1000', 'idr_2000', 'idr_5000', 'idr_10000', 'idr_50000']:
+  img = glob.glob(os.path.join(data_dir, d, '*.jpg'))[0]; i = inference.preprocess_image(open(img, 'rb').read()); d_feat, c = inference.get_orb_and_color_features(i); b = inference.get_bovw_histogram(d_feat, inference._kmeans_model); bt = inference._tfidf.transform([b]).toarray()[0]; f = inference._scaler.transform([np.hstack((bt, c))]); dec = inference._svm.decision_function(f)[0]; dec = sorted(dec); print(f'{d} margin: {dec[-1] - dec[-2]:.3f} (Max: {dec[-1]:.3f}, Min: {dec[0]:.3f})');
