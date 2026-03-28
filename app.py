@@ -10,6 +10,10 @@ app.config['JSON_SORT_KEYS'] = False
 def index():
     return render_template('index.html')
 
+@app.route('/test')
+def test_page():
+    return render_template('test.html')
+
 @app.route('/api/detect', methods=['POST'])
 def detect():
     if 'frame' not in request.files:
@@ -50,6 +54,8 @@ def detect():
         "confidence": confidence,
         "raw_label": label
     }
+    if "box" in result:
+        response_data["box"] = result["box"]
     
     if confidence >= 0.75:
         response_data['message'] = friendly_label

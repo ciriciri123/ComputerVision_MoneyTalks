@@ -1,1 +1,0 @@
-import requests, glob, os; img = glob.glob(r'c:\Kuliah\Semester 4\Final Project\money-talks\data\idr_50000\*.jpg')[0]; print('Sending:', img); resp = requests.post('http://127.0.0.1:5000/api/detect', files={'frame': open(img, 'rb')}); print(resp.json())
