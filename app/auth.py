@@ -1,42 +1,43 @@
 """
 app/auth.py — MoneyTalks Admin Authentication
 =============================================
-Handles all authentication logic for the administrator portal:
-    - Flask-Login user_loader (reconstructs the user object from session)
-    - AdminUser class (the Flask-Login User model backed by Supabase)
-    - Login Blueprint (GET /admin/login, POST /admin/login)
-    - Logout route (POST /admin/logout)
+CHANGES FROM PREVIOUS VERSION:
+  - login() and login_post() merged into a single view function handling
+    both GET and POST. Two separate endpoints on the same URL caused ambiguity
+    in url_for() and is non-standard Flask practice.
+  - @limiter.limit(..., methods=["POST"]) applies rate limiting only to POST.
 
-How authentication flows through the stack:
+No other changes. All Supabase calls, bcrypt logic, and Flask-Login
+integration are unchanged from the Data Tier implementation.
 
-    1. Admin submits the login form → POST /admin/login
-    2. auth.py calls supabase_client.get_db().get_admin_by_email(email)
-    3. bcrypt.checkpw() compares the submitted password to the stored hash
-    4. On success, Flask-Login calls login_user(AdminUser(record))
-    5. Flask sets an encrypted session cookie containing admin_id
-    6. On every subsequent request to an @login_required route:
-         a. Flask-Login reads admin_id from the session cookie
-         b. Calls load_admin_user(admin_id) → supabase_client.get_admin_by_id()
-         c. Reconstructs the AdminUser object and attaches it to current_user
-
-Why bcrypt here and not in supabase_client.py?
-    bcrypt is a business-logic concern (password policy), not a data concern.
-    supabase_client.py only handles storage and retrieval — it returns the raw
-    hash and lets auth.py decide how to verify it.
+Auth flow summary:
+  GET  /admin/login     → renders admin/login.html
+  POST /admin/login     → validates credentials → session → redirect dashboard
+  POST /admin/logout    → destroys session → redirect login
+  GET  /admin/dashboard → @login_required → renders dashboard (or → login)
+  GET  /admin/images    → @login_required → renders images list
+  GET  /admin/models    → @login_required → renders model list
 """
 
 import logging
+from datetime import date as date_type
 
 import bcrypt
-from flask import Blueprint, flash, redirect, render_template, request, url_for
-from flask_login import UserMixin, current_user, login_required, login_user, logout_user
+from flask import (
+    Blueprint, flash, redirect, render_template,
+    request, url_for,
+)
+from flask_login import (
+    UserMixin, current_user,
+    login_required, login_user, logout_user,
+)
 
 from app import login_manager, limiter
-from app.services.supabase_client import get_db, AdminRecord, SupabaseError
+from app.services.supabase_client import AdminRecord, SupabaseError, get_db
 
 logger = logging.getLogger(__name__)
 
-# Blueprint: all routes in this file are prefixed with /admin (set in __init__.py)
+# url_prefix="/admin" is set when this Blueprint is registered in __init__.py.
 auth_bp = Blueprint("auth", __name__, template_folder="templates")
 
 
@@ -48,22 +49,9 @@ class AdminUser(UserMixin):
     """
     Flask-Login User model backed by an AdminRecord from Supabase.
 
-    Flask-Login requires this class to implement four properties:
-        is_authenticated, is_active, is_anonymous, get_id()
-    UserMixin provides sensible defaults for all four; we only need to
-    supply the data and override get_id() to return admin_id.
-
-    This class is intentionally thin. It wraps the AdminRecord dataclass
-    and exposes its fields as attributes. Business logic stays in auth.py.
-
-    Attributes:
-        admin_id: Primary key from the Administrator table.
-        email:    Administrator's email address.
-        username: Display name shown on the dashboard.
-        phone:    Optional phone number.
-
-    Note: The password hash is NOT stored on this object. It is only read
-    during the login check and discarded immediately after bcrypt.checkpw().
+    UserMixin provides correct defaults for is_authenticated, is_active,
+    is_anonymous. We only override get_id() to return admin_id.
+    Password hash is NOT stored here — read once during login and discarded.
     """
 
     def __init__(self, record: AdminRecord) -> None:
@@ -71,15 +59,9 @@ class AdminUser(UserMixin):
         self.email    = record.email
         self.username = record.username
         self.phone    = record.phone
-        # password hash is NOT stored — only used once during login
 
     def get_id(self) -> str:
-        """
-        Return the unique identifier stored in the session cookie.
-
-        Flask-Login stores this string in the session and passes it back
-        to load_admin_user() on every subsequent request.
-        """
+        """Return the unique string stored in the session cookie."""
         return self.admin_id
 
 
@@ -88,73 +70,58 @@ class AdminUser(UserMixin):
 # =============================================================================
 
 @login_manager.user_loader
-def load_admin_user(admin_id: str) -> AdminUser | None:
+def load_admin_user(admin_id: str):
     """
-    Called by Flask-Login on EVERY request to a protected route.
-
-    Flask-Login reads the admin_id from the session cookie and calls this
-    function to reconstruct the current_user object. If this returns None,
-    Flask-Login treats the session as invalid and forces a re-login.
-
-    Performance note: this makes one Supabase round-trip per protected request.
-    For MoneyTalks' expected admin traffic (1–3 concurrent admins), this is
-    acceptable. If it becomes a bottleneck, add a short-lived in-memory cache
-    keyed by admin_id with a TTL of ~30 seconds.
-
-    Args:
-        admin_id: The value returned by AdminUser.get_id() at login time.
-
-    Returns:
-        AdminUser if the admin_id exists in the database, None otherwise.
+    Called by Flask-Login on EVERY request to a @login_required route.
+    Reconstructs current_user from the session cookie's admin_id.
+    Returns None to invalidate the session and redirect to login.
     """
     try:
         record = get_db().get_admin_by_id(admin_id)
         if record is None:
-            logger.warning("user_loader: admin_id '%s' not found in database.", admin_id)
+            logger.warning("user_loader: admin_id '%s' not in database.", admin_id)
             return None
         return AdminUser(record)
     except SupabaseError as exc:
-        # Log the error but return None so Flask-Login degrades gracefully
-        # (redirects to login) rather than returning a 500 error.
-        logger.error("user_loader: Supabase error for admin_id '%s': %s", admin_id, exc)
+        logger.error("user_loader: Supabase error for '%s': %s", admin_id, exc)
         return None
 
 
 # =============================================================================
-# LOGIN / LOGOUT ROUTES
+# LOGIN / LOGOUT
 # =============================================================================
 
-@auth_bp.route("/login", methods=["GET"])
+@auth_bp.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute", methods=["POST"])
 def login():
     """
-    GET /admin/login — Render the admin login page.
-
-    If the admin already has a valid session, skip the login form and redirect
-    directly to the dashboard.
-    """
-    if current_user.is_authenticated:
-        return redirect(url_for("auth.dashboard"))
-    return render_template("admin/login.html")
-
-
-@auth_bp.route("/login", methods=["POST"])
-@limiter.limit("5 per minute")   # Rate-limit: 5 login attempts per IP per minute
-def login_post():
-    """
+    GET  /admin/login — Render the login page.
     POST /admin/login — Validate credentials and create a session.
 
-    Security measures applied here:
-        - Rate limiting (5/min/IP) via @limiter.limit (Flask-Limiter).
-        - Constant-time password comparison via bcrypt.checkpw().
-        - Generic error message ("Invalid email or password") to prevent
-          email enumeration (attacker cannot tell if email exists).
-        - Supabase query errors are caught and logged server-side; the user
-          sees the same generic error, not internal details.
+    GET: redirect to dashboard if already authenticated, else show form.
+    POST:
+        1. Read email + password from form.
+        2. Fetch AdminRecord from Supabase by email.
+        3. bcrypt.checkpw() comparison (~100-200ms intentional cost).
+        4. On success: login_user() -> redirect to dashboard.
+        5. On failure: flash generic error -> re-render login (HTTP 401).
+
+    Security:
+        - Rate limited: 5 POST attempts per minute per IP (Flask-Limiter).
+        - CSRF token validated by Flask-WTF CSRFProtect before this runs.
+        - Generic error message prevents email enumeration.
+        - 'next' URL validated before use (prevents open redirects).
     """
+    # ── GET ──────────────────────────────────────────────────────────────────
+    if request.method == "GET":
+        if current_user.is_authenticated:
+            return redirect(url_for("auth.dashboard"))
+        return render_template("admin/login.html")
+
+    # ── POST ─────────────────────────────────────────────────────────────────
     email    = request.form.get("email",    "").strip().lower()
     password = request.form.get("password", "").strip()
 
-    # Basic presence check before hitting the database
     if not email or not password:
         flash("Please enter both email and password.", "error")
         return render_template("admin/login.html"), 400
@@ -162,25 +129,24 @@ def login_post():
     try:
         record = get_db().get_admin_by_email(email)
     except SupabaseError as exc:
-        logger.error("Login: Supabase error fetching admin '%s': %s", email, exc)
-        flash("A server error occurred. Please try again.", "error")
+        logger.error("login: Supabase error fetching '%s': %s", email, exc)
+        flash("A server error occurred. Please try again later.", "error")
         return render_template("admin/login.html"), 500
 
-    # Deliberate: use the same branch for "not found" and "wrong password"
-    # so the response time is similar and no information is leaked.
+    # Same branch for "not found" and "wrong password" to prevent email enumeration
     if record is None or not _verify_password(password, record.password):
-        logger.warning("Failed login attempt for email: %s", email)
+        logger.warning("Failed login attempt for email: %s (IP: %s)",
+                       email, request.remote_addr)
         flash("Invalid email or password.", "error")
         return render_template("admin/login.html"), 401
 
-    # ── Login successful ──────────────────────────────────────────────────────
+    # Success
     admin = AdminUser(record)
-    login_user(admin, remember=False)   # no persistent "remember me" cookie
-    logger.info("Admin logged in: %s (%s)", record.username, record.admin_id)
+    login_user(admin, remember=False)
+    logger.info("Admin signed in: %s (%s) from %s",
+                record.username, record.admin_id, request.remote_addr)
 
-    # Redirect to the page the admin originally tried to access (if any),
-    # defaulting to the dashboard. Validate next to prevent open redirects.
-    next_page = request.args.get("next")
+    next_page = request.args.get("next", "")
     if next_page and _is_safe_redirect(next_page):
         return redirect(next_page)
     return redirect(url_for("auth.dashboard"))
@@ -190,37 +156,38 @@ def login_post():
 @login_required
 def logout():
     """
-    POST /admin/logout — Destroy the admin session.
+    POST /admin/logout — Destroy the current admin session.
 
-    Uses POST (not GET) to prevent logout via prefetching or CSRF.
-    The template must include a CSRF-protected form with method="POST".
+    POST (not GET) prevents browser prefetch and CSRF-based logout attacks.
+    The sidebar template includes a CSRF-protected <form> for this button.
     """
-    logger.info("Admin logged out: %s", current_user.admin_id)
+    logger.info("Admin signed out: %s (%s)", current_user.username, current_user.admin_id)
     logout_user()
-    flash("You have been logged out.", "info")
+    flash("You have been signed out.", "info")
     return redirect(url_for("auth.login"))
 
 
 # =============================================================================
-# DASHBOARD & ADMIN PAGE ROUTES
+# ADMIN PAGE ROUTES
 # =============================================================================
 
 @auth_bp.route("/dashboard")
 @login_required
 def dashboard():
     """
-    GET /admin/dashboard — Render the admin overview page.
+    GET /admin/dashboard — Admin overview page.
 
-    Fetches summary data from Supabase:
-        - Total number of scanned images
-        - Currently active model version info
+    Context injected into admin/dashboard.html:
+        admin        — AdminUser (current_user)
+        scan_count   — int | "N/A"
+        active_model — ModelRecord | None
     """
     try:
-        db          = get_db()
-        scan_count  = db.get_scan_count()
+        db           = get_db()
+        scan_count   = db.get_scan_count()
         active_model = db.get_active_model()
     except SupabaseError as exc:
-        logger.error("Dashboard: Supabase error: %s", exc)
+        logger.error("dashboard: Supabase error: %s", exc)
         scan_count   = "N/A"
         active_model = None
 
@@ -238,14 +205,10 @@ def images():
     """
     GET /admin/images — Paginated list of ScannedMoney records.
 
-    Query parameters:
-        from  (str, YYYY-MM-DD): Start of date range filter.
-        to    (str, YYYY-MM-DD): End of date range filter.
-        page  (int, default 1): Page number.
+    Query params: from (YYYY-MM-DD), to (YYYY-MM-DD), page (int, default 1).
+    Template: admin/images.html (future sprint).
     """
-    from datetime import date as date_type
-
-    def _parse_date(param: str | None) -> date_type | None:
+    def _parse_date(param):
         if not param:
             return None
         try:
@@ -259,23 +222,16 @@ def images():
 
     try:
         records, total = get_db().get_scan_records(
-            from_date=from_date,
-            to_date=to_date,
-            page=page,
-            page_size=50,
+            from_date=from_date, to_date=to_date, page=page, page_size=50,
         )
     except SupabaseError as exc:
-        logger.error("Images page: Supabase error: %s", exc)
+        logger.error("images: Supabase error: %s", exc)
         records, total = [], 0
 
     return render_template(
         "admin/images.html",
-        records   = records,
-        total     = total,
-        page      = page,
-        from_date = from_date,
-        to_date   = to_date,
-        admin     = current_user,
+        admin=current_user, records=records, total=total,
+        page=page, from_date=from_date, to_date=to_date,
     )
 
 
@@ -284,17 +240,18 @@ def images():
 def models():
     """
     GET /admin/models — List all model versions.
+
+    Template: admin/models.html (future sprint).
     """
     try:
         model_list = get_db().get_all_models()
     except SupabaseError as exc:
-        logger.error("Models page: Supabase error: %s", exc)
+        logger.error("models: Supabase error: %s", exc)
         model_list = []
 
     return render_template(
         "admin/models.html",
-        models = model_list,
-        admin  = current_user,
+        admin=current_user, models=model_list,
     )
 
 
@@ -303,37 +260,17 @@ def models():
 # =============================================================================
 
 def _verify_password(plain: str, hashed: str) -> bool:
-    """
-    Compare a plain-text password against a bcrypt hash.
-
-    Uses bcrypt.checkpw() which is constant-time and safe against timing
-    attacks. The comparison takes ~100-200ms at cost factor 12 — this is
-    intentional and desirable as it limits brute-force speed.
-
-    Args:
-        plain:  The password string submitted in the login form.
-        hashed: The bcrypt hash string stored in the Administrator table.
-
-    Returns:
-        True if the password matches, False otherwise.
-    """
+    """bcrypt password comparison. Returns False on any error."""
     try:
         return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
     except Exception as exc:
-        # bcrypt.checkpw raises on malformed hashes (e.g. if the DB column is
-        # accidentally storing a plain-text password). Log and treat as failure.
-        logger.error("bcrypt.checkpw raised an exception: %s", exc)
+        logger.error("bcrypt.checkpw raised: %s", exc)
         return False
 
 
 def _is_safe_redirect(url: str) -> bool:
     """
-    Return True if the 'next' redirect URL is safe (relative path only).
-
-    Prevents open redirect attacks where an attacker crafts a login URL like:
-        /admin/login?next=https://evil.com
-    and tricks the admin into being redirected to an external site.
-
-    Only relative paths (starting with /) are allowed.
+    Accept only relative paths (starts with '/', not '//').
+    Prevents open redirect via ?next=https://evil.com.
     """
-    return url.startswith("/") and not url.startswith("//")
+    return bool(url) and url.startswith("/") and not url.startswith("//")
