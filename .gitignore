@@ -6,5 +6,5 @@ __pycache__/
 data/
 
 # env
-.env
+.venv
 __pycache__

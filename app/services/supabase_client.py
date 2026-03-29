@@ -43,7 +43,8 @@ from typing import Optional
 from uuid import uuid4
 
 from supabase import Client, create_client
-from supabase.lib.client_options import ClientOptions
+from supabase import create_client, Client, ClientOptions
+# from supabase.lib.client_options import ClientOptions
 
 logger = logging.getLogger(__name__)
 
@@ -138,8 +139,8 @@ class SupabaseService:
     # ── Storage path templates ─────────────────────────────────────────────────
     # Centralising path composition here means changing the naming convention
     # requires editing only these two lines.
-    _SCAN_PATH_TEMPLATE  = "scans/{year}/{month:02d}/{day:02d}/{uuid}.jpg"
-    _MODEL_PATH_TEMPLATE = "models/{model_id}/model.pkl"
+    _SCAN_PATH_TEMPLATE  = "{year}/{month:02d}/{day:02d}/{uuid}.jpg"
+    _MODEL_PATH_TEMPLATE = "{model_id}/model.pkl"
 
     def __init__(self, url: str, key: str, images_bucket: str, models_bucket: str) -> None:
         """

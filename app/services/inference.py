@@ -93,7 +93,7 @@ def load_model(model_path: str) -> None:
         ) from exc
 
     # Validate that the object looks like a scikit-learn estimator
-    if not hasattr(candidate, "predict") or not hasattr(candidate, "predict_proba"):
+    if not hasattr(candidate, "predict") and not hasattr(candidate, "predict_proba"):
         raise ModelLoadError(
             f"The object loaded from '{model_path}' does not have predict() "
             "and predict_proba() methods. Ensure it is a fitted scikit-learn estimator."
