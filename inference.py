@@ -1,12 +1,13 @@
 import os
 import io
+import re
+from collections import Counter
 import cv2
 import numpy as np
 import joblib
 import pytesseract
 from PIL import Image
 
-# MENGHUBUNGKAN PYTHON KE TESSERACT
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 MODELS_DIR = os.path.join(os.path.dirname(__file__), 'models', 'proposed')
@@ -15,6 +16,185 @@ _models_loaded = False
 _kmeans_model = None
 _tfidf = None
 _svm = None
+
+DENOMINATION_MAP = {
+    '100000': 'idr_100000',
+    '50000': 'idr_50000',
+    '20000': 'idr_20000',
+    '10000': 'idr_10000',
+    '5000': 'idr_5000',
+    '2000': 'idr_2000',
+    '1000': 'idr_1000'
+}
+
+DENOMINATION_KEYS = sorted(DENOMINATION_MAP.keys(), key=len, reverse=True)
+
+def _normalize_ocr_text(text):
+    cleaned = text.replace('\n', ' ').replace('\r', ' ')
+    cleaned = re.sub(r'[^0-9 ]+', ' ', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+def _levenshtein_distance(a, b):
+    if a == b: return 0
+    if not a: return len(b)
+    if not b: return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        curr = [i]
+        for j, cb in enumerate(b, start=1):
+            insert_cost = curr[j - 1] + 1
+            delete_cost = prev[j] + 1
+            replace_cost = prev[j - 1] + (0 if ca == cb else 1)
+            curr.append(min(insert_cost, delete_cost, replace_cost))
+        prev = curr
+    return prev[-1]
+
+def _extract_denom_candidates(cleaned_text):
+    if not cleaned_text: return []
+    tokens = re.findall(r'\d+', cleaned_text)
+    if not tokens: return []
+    candidates = set(tokens)
+    max_window = min(6, len(tokens))
+    for window in range(2, max_window + 1):
+        for i in range(len(tokens) - window + 1):
+            merged = ''.join(tokens[i:i + window])
+            candidates.add(merged)
+    matched = []
+    for denom in DENOMINATION_KEYS:
+        if denom in candidates:
+            matched.append(denom)
+    filtered = []
+    for denom in matched:
+        overshadowed = any(
+            (other != denom and len(other) > len(denom) and other.startswith(denom))
+            for other in matched
+        )
+        if not overshadowed:
+            filtered.append(denom)
+    return filtered
+
+def _extract_fuzzy_denom_scores(cleaned_text):
+    if not cleaned_text: return {}
+    tokens = re.findall(r'\d+', cleaned_text)
+    if not tokens: return {}
+    candidates = set(tokens)
+    max_window = min(6, len(tokens))
+    for window in range(2, max_window + 1):
+        for i in range(len(tokens) - window + 1):
+            candidates.add(''.join(tokens[i:i + window]))
+    fuzzy_scores = Counter()
+    for cand in candidates:
+        if len(cand) < 4 or len(cand) > 6: continue
+        for denom in DENOMINATION_KEYS:
+            if abs(len(cand) - len(denom)) > 1: continue
+            dist = _levenshtein_distance(cand, denom)
+            if dist == 1:
+                fuzzy_scores[denom] += 0.85
+            elif dist == 2 and len(denom) >= 5:
+                fuzzy_scores[denom] += 0.35
+    return dict(fuzzy_scores)
+
+def _get_ocr_rois(zoom_ocr):
+    h, w = zoom_ocr.shape[:2]
+    left_roi = zoom_ocr[:, :int(w * 0.55)]
+    right_roi = zoom_ocr[:, int(w * 0.45):]
+    center_roi = zoom_ocr[int(h * 0.20):int(h * 0.80), int(w * 0.20):int(w * 0.80)]
+    top_left_roi = zoom_ocr[:int(h * 0.50), :int(w * 0.45)]
+    return [
+        ("full", zoom_ocr),
+        ("left", left_roi),
+        ("right", right_roi),
+        ("center", center_roi),
+        ("top_left", top_left_roi)
+    ]
+
+def _denom_from_label(label):
+    if not label or not label.startswith('idr_'): return ''
+    return label.split('_', 1)[1]
+
+def _predict_with_ocr(ocr_crop):
+    h_ocr, w_ocr = ocr_crop.shape[:2]
+    zoom_factor = 3 if max(h_ocr, w_ocr) < 600 else 2
+    zoom_ocr = cv2.resize(
+        ocr_crop,
+        (w_ocr * zoom_factor, h_ocr * zoom_factor),
+        interpolation=cv2.INTER_CUBIC
+    )
+    
+    ocr_configs = [
+        '--psm 6',
+        '--psm 11'
+    ]
+
+    candidate_score = Counter()
+    candidate_hits = Counter()
+    pass_count = 0
+    digit_pass_count = 0
+    candidate_pass_count = 0
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    for roi_name, roi_img in _get_ocr_rois(zoom_ocr):
+        gray_ocr = cv2.cvtColor(roi_img, cv2.COLOR_BGR2GRAY)
+        blur_ocr = cv2.GaussianBlur(gray_ocr, (5, 5), 0)
+        enhanced_ocr = clahe.apply(gray_ocr)
+        _, otsu_bin = cv2.threshold(blur_ocr, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        preprocessed_images = [
+            ("gray", gray_ocr),
+            ("enh", enhanced_ocr),
+            ("otsu", otsu_bin) 
+        ]
+
+        for prep_name, ocr_img in preprocessed_images:
+            for config in ocr_configs:
+                try:
+                    ocr_text = pytesseract.image_to_string(ocr_img, config=config)
+                    cleaned_text = _normalize_ocr_text(ocr_text)
+                    pass_count += 1
+
+                    if cleaned_text:
+                        digit_pass_count += 1
+                        print(f"[OCR PASS] roi={roi_name} prep={prep_name} psm={config.split()[1]} text='{cleaned_text}'")
+
+                    matched_denoms = _extract_denom_candidates(cleaned_text)
+                    if matched_denoms:
+                        candidate_pass_count += 1
+                        tokens = re.findall(r'\d+', cleaned_text)
+                        token_set = set(tokens)
+                        collapsed = ''.join(tokens)
+
+                        for denom in set(matched_denoms):
+                            score = 1.0
+                            if denom in token_set: score += 0.9
+                            elif denom in collapsed: score += 0.35
+                            score += 0.12 * max(len(denom) - 4, 0)
+
+                            candidate_score[denom] += score
+                            candidate_hits[denom] += 1
+
+                    fuzzy_scores = _extract_fuzzy_denom_scores(cleaned_text)
+                    for denom, fuzzy_score in fuzzy_scores.items():
+                        candidate_score[denom] += fuzzy_score
+                except Exception:
+                    continue
+
+    if not candidate_score:
+        return None, 0.0, pass_count
+
+    best_denom = max(
+        candidate_score,
+        key=lambda d: (candidate_hits[d], candidate_score[d], len(d))
+    )
+    hits = candidate_hits[best_denom]
+    vote_ratio = hits / max(candidate_pass_count, 1)
+    ocr_label = DENOMINATION_MAP[best_denom]
+    print(
+        f"[OCR VOTE] score={dict(candidate_score)} hits={dict(candidate_hits)} | pilih={best_denom} "
+        f"(hit={hits}/{candidate_pass_count} kandidat-pass, digit-pass={digit_pass_count}, total={pass_count})"
+    )
+
+    return ocr_label, float(vote_ratio), pass_count
 
 def load_models():
     global _models_loaded, _kmeans_model, _tfidf, _svm
@@ -37,43 +217,41 @@ def preprocess_image(image_bytes):
     return cv_img
 
 def get_orb_and_color_features(img, max_features=2000):
-    # --- 1. MAGIC FIX: CANNY EDGE DENGAN HEAVY BLUR (ANTI-MEJA) ---
-    gray_full = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    
-    # Blur sangat tebal agar motif meja marmer menghilang, sisa bentuk uang saja
-    blurred_full = cv2.GaussianBlur(gray_full, (15, 15), 0)
-    edges = cv2.Canny(blurred_full, 30, 100)
-    
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
-    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-    dilated = cv2.dilate(closed, kernel, iterations=2)
-    
-    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    
     H, W = img.shape[:2]
+    orb = cv2.ORB_create(nfeatures=max_features)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    enhanced = clahe.apply(gray)
+    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
+    
+    keypoints_rough, _ = orb.detectAndCompute(blurred, None)
+    
     box_coords = None
     money_crop = img
     
-    if contours:
-        # Ambil garis tepi paling besar di layar
-        largest_contour = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(largest_contour) > 15000:
-            x, y, w, h = cv2.boundingRect(largest_contour)
-            money_crop = img[y:y+h, x:x+w]
-            box_coords = [float(x/W), float(y/H), float(w/W), float(h/H)]
+    if keypoints_rough and len(keypoints_rough) >= 30:
+        pts = np.array([kp.pt for kp in keypoints_rough])
+        x_min, y_min = np.min(pts, axis=0)
+        x_max, y_max = np.max(pts, axis=0)
+        
+        pad_x = int((x_max - x_min) * 0.10)
+        pad_y = int((y_max - y_min) * 0.10)
+        
+        x1 = max(0, int(x_min) - pad_x)
+        y1 = max(0, int(y_min) - pad_y)
+        x2 = min(W, int(x_max) + pad_x)
+        y2 = min(H, int(y_max) + pad_y)
+        
+        money_crop = img[y1:y2, x1:x2]
+        box_coords = [float(x1/W), float(y1/H), float((x2-x1)/W), float((y2-y1)/H)]
             
-    # --- 2. AUTO-ROTATE ---
     if money_crop.shape[0] > money_crop.shape[1]:
         money_crop = cv2.rotate(money_crop, cv2.ROTATE_90_CLOCKWISE)
         
-    # --- 3. SIMPAN POTONGAN ASLI UNTUK OCR (ANTI-GEPENG!) ---
     ocr_crop = money_crop.copy()
-        
-    # --- 4. RESIZE KHUSUS UNTUK SVM ---
     svm_crop = cv2.resize(money_crop, (800, 400))
     
-    orb = cv2.ORB_create(nfeatures=max_features)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
     gray_svm = cv2.cvtColor(svm_crop, cv2.COLOR_BGR2GRAY)
     enhanced_svm = clahe.apply(gray_svm)
     blurred_svm = cv2.GaussianBlur(enhanced_svm, (5, 5), 0)
@@ -86,7 +264,6 @@ def get_orb_and_color_features(img, max_features=2000):
     cv2.normalize(hist, hist) 
     color_hist = hist.flatten()
         
-    # Kita berikan 'ocr_crop' ke luar fungsi
     return final_keypoints, final_descriptors, color_hist, box_coords, ocr_crop
 
 def get_bovw_histogram(descriptors, kmeans_model):
@@ -108,7 +285,7 @@ def predict_currency(image_bytes):
         if len(descriptors) < 50:
             return {"label": "none", "confidence": 0.0}
 
-        # --- 1. PREDIKSI SVM ---
+        # Prediksi SVM
         bovw_raw = get_bovw_histogram(descriptors, _kmeans_model)
         bovw_tfidf = _tfidf.transform([bovw_raw]).toarray()[0]
         bovw_tfidf = bovw_tfidf * 3.0
@@ -118,53 +295,59 @@ def predict_currency(image_bytes):
         svm_label = str(raw_label)
         
         proba = _svm.predict_proba([fused])[0]
-        confidence = np.max(proba)
+        confidence = float(np.max(proba))
+        sorted_proba = np.sort(proba)
+        svm_margin = float(sorted_proba[-1] - sorted_proba[-2]) if len(sorted_proba) >= 2 else float(confidence)
 
-        # --- 2. PREDIKSI OCR ---
+        # Prediksi OCR
         ocr_label = None
+        ocr_vote_ratio = 0.0
         try:
-            # MAGIC FIX 2: ADAPTIVE THRESHOLD (ANTI SILAU)
-            H_ocr, W_ocr = ocr_crop.shape[:2]
-            # Zoom proporsional 2x lipat
-            zoom_ocr = cv2.resize(ocr_crop, (W_ocr*2, H_ocr*2), interpolation=cv2.INTER_CUBIC)
-            
-            gray_ocr = cv2.cvtColor(zoom_ocr, cv2.COLOR_BGR2GRAY)
-            blur_ocr = cv2.GaussianBlur(gray_ocr, (5, 5), 0)
-            
-            # Adaptive Threshold sangat bagus untuk cahaya tidak rata (flash kamera)
-            thresh_ocr = cv2.adaptiveThreshold(blur_ocr, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5)
-            
-            ocr_text = pytesseract.image_to_string(thresh_ocr, config='--psm 11 -c tessedit_char_whitelist=0123456789')
-            cleaned_text = ocr_text.strip().replace('\n', ' ')
-            print(f"[OCR RAW TEXT] Hasil pembacaan: {cleaned_text}")
-            
-            denominations = {'100000': 'idr_100000', '50000': 'idr_50000', '20000': 'idr_20000', 
-                             '10000': 'idr_10000', '5000': 'idr_5000', '2000': 'idr_2000', '1000': 'idr_1000'}
-            
-            # Kita pisahkan jadi kata per kata agar 2000 tidak terbaca saat sebenarnya 20000
-            words = cleaned_text.split()
-            for denom, label in denominations.items():
-                if denom in words or denom in cleaned_text:
-                    # Validasi Ekstra: Cegah salah paham angka nol
-                    if denom == '2000' and '20000' in cleaned_text: continue
-                    if denom == '1000' and '10000' in cleaned_text: continue
-                    if denom == '1000' and '100000' in cleaned_text: continue
-                    if denom == '10000' and '100000' in cleaned_text: continue
-                    
-                    ocr_label = label
-                    print(f"[OCR SUCCESS] Angka {denom} ditemukan!")
-                    break
+            ocr_label, ocr_vote_ratio, ocr_pass_count = _predict_with_ocr(ocr_crop)
+            if ocr_label:
+                print(f"[OCR SUCCESS] label={ocr_label} vote_ratio={ocr_vote_ratio:.2f} dari {ocr_pass_count} pass")
         except Exception as e:
             print(f"[OCR WARNING] Tesseract error: {e}")
 
-        # --- 3. DECISION FUSION ---
+        # Pilih label terakhir
         final_label = svm_label
         
-        # Hakim OCR Menyelamatkan Hari!
-        if ocr_label and (confidence < 0.90 or ocr_label != svm_label):
-            final_label = ocr_label
-            confidence = 0.99 
-            print(f"[FUSION] OCR Overwrite! Mengubah prediksi menjadi {ocr_label}")
+        if ocr_label:
+            if ocr_label == svm_label:
+                confidence = min(0.995, max(confidence, 0.72 + (0.25 * ocr_vote_ratio)))
+                print(f"[FUSION] SVM dan OCR sepakat pada {svm_label}, confidence dinaikkan")
+            elif confidence < 0.72 and ocr_vote_ratio >= 0.45:
+                final_label = ocr_label
+                confidence = min(0.98, max(confidence, 0.60 + (0.35 * ocr_vote_ratio) + (0.20 * (1.0 - svm_margin))))
+                print(f"[FUSION] OCR override (SVM lemah): {svm_label} -> {ocr_label}")
+            elif svm_margin < 0.20 and ocr_vote_ratio >= 0.35:
+                final_label = ocr_label
+                confidence = min(0.97, max(confidence, 0.58 + (0.40 * ocr_vote_ratio) + (0.10 * (1.0 - svm_margin))))
+                print(f"[FUSION] OCR override (SVM ambigu): {svm_label} -> {ocr_label}")
+            elif confidence < 0.70 and ocr_vote_ratio >= 0.18:
+                final_label = ocr_label
+                confidence = min(0.92, max(confidence, 0.54 + (0.32 * ocr_vote_ratio) + (0.16 * (1.0 - svm_margin))))
+                print(f"[FUSION] OCR override (soft): {svm_label} -> {ocr_label}")
+            elif (
+                ocr_vote_ratio >= 0.15 and
+                confidence < 0.85 and
+                len(_denom_from_label(ocr_label)) > len(_denom_from_label(svm_label)) and
+                _denom_from_label(ocr_label).startswith(_denom_from_label(svm_label))
+            ):
+                final_label = ocr_label
+                confidence = min(0.94, max(confidence, 0.60 + (0.28 * ocr_vote_ratio)))
+                print(f"[FUSION] OCR override (denom panjang): {svm_label} -> {ocr_label}")
+            elif confidence < 0.45 and ocr_vote_ratio > 0.0:
+                final_label = ocr_label
+                confidence = min(0.90, max(confidence, 0.52 + (0.22 * ocr_vote_ratio)))
+                print(f"[FUSION] OCR override fallback: {svm_label} -> {ocr_label}")
+            else:
+                print(
+                    f"[FUSION] Pertahankan SVM={svm_label}; OCR={ocr_label} belum cukup kuat "
+                    f"(svm_conf={confidence:.3f}, margin={svm_margin:.3f}, ocr_vote={ocr_vote_ratio:.2f})"
+                )
+
+        confidence = float(min(max(confidence, 0.01), 0.995))
 
         result = {
             'label': final_label,
