@@ -91,3 +91,5 @@ The trained models and dictionaries will be automatically saved in their respect
 streamlit run app.py
 ```
 *(or depending on backend setup, `python app.py`)*
+
+hehehe halooo guys
