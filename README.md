@@ -1,0 +1,1 @@
+this readme is soo fkn usefull, no doubt at all.
