@@ -30,6 +30,7 @@ ComputerVision_MoneyTalks/
 ├── app.py                # Main application entry point
 ├── requirements.txt      # Project dependencies
 └── README.md             # This file
+
 ```
 
 ## Methodology
