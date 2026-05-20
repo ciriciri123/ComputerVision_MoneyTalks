@@ -1,0 +1,34 @@
+{% extends "admin/base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+
+<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap:16px; margin-bottom:28px;">
+    <div class="card" style="text-align:center; padding:28px 20px;">
+        <div style="font-size:2.5rem; font-weight:800; color:#0ea5e9;">{{ stats.get('total_scans', '—') }}</div>
+        <div style="color:#64748b; font-size:0.9rem; margin-top:6px;">Total Scan</div>
+    </div>
+    <div class="card" style="text-align:center; padding:28px 20px;">
+        <div style="font-size:1.1rem; font-weight:700; color:#22c55e;">
+            {% if deployed %}v{{ deployed.version_string }}{% else %}Default{% endif %}
+        </div>
+        <div style="color:#64748b; font-size:0.9rem; margin-top:6px;">Model Aktif</div>
+    </div>
+    {% if deployed %}
+    <div class="card" style="text-align:center; padding:28px 20px;">
+        <div style="font-size:0.95rem; font-weight:600; color:#475569;">{{ deployed.uploaded_at[:10] }}</div>
+        <div style="color:#64748b; font-size:0.9rem; margin-top:6px;">Tanggal Deploy Terakhir</div>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>Quick Links</h2>
+    <div style="display:flex; gap:12px; flex-wrap:wrap;">
+        <a href="{{ url_for('admin_images') }}" class="btn btn-primary">Lihat Scan Images</a>
+        <a href="{{ url_for('admin_models') }}" class="btn btn-outline">Kelola Model</a>
+        <a href="{{ url_for('index') }}" class="btn btn-outline">Buka Aplikasi</a>
+    </div>
+</div>
+{% endblock %}

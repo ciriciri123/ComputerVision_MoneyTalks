@@ -1,0 +1,77 @@
+{% extends "admin/base.html" %}
+{% block title %}Model Versions{% endblock %}
+
+{% block content %}
+<h1>Model Versions</h1>
+
+<!-- Upload form -->
+<div class="card">
+    <h2>Upload Model Baru</h2>
+    <p style="color:#64748b; font-size:0.88rem; margin-bottom:16px;">
+        Upload file <code>.zip</code> yang berisi tepat tiga file:
+        <code>bovw_dictionary.pkl</code>, <code>svm_model.pkl</code>, <code>tfidf_scaler.pkl</code>.
+    </p>
+    <form method="POST" action="{{ url_for('admin_models_upload') }}" enctype="multipart/form-data"
+          style="display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group" style="margin:0; flex:1; min-width:140px;">
+            <label>Nama Versi</label>
+            <input type="text" name="version_string" required placeholder="e.g. 2.0">
+        </div>
+        <div class="form-group" style="margin:0; flex:2; min-width:200px;">
+            <label>File ZIP</label>
+            <input type="file" name="model_zip" accept=".zip" required>
+        </div>
+        <button type="submit" class="btn btn-success">Upload</button>
+    </form>
+</div>
+
+<!-- Versions table -->
+<div class="card" style="padding:0; overflow:hidden;">
+    {% if versions %}
+    <table>
+        <thead>
+            <tr>
+                <th>Versi</th>
+                <th>Diunggah Oleh</th>
+                <th>Tanggal Upload</th>
+                <th>Status</th>
+                <th>Aksi</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for v in versions %}
+            <tr>
+                <td><strong>v{{ v.version_string }}</strong></td>
+                <td>{{ v.uploaded_by or '—' }}</td>
+                <td style="color:#64748b; font-size:0.85rem;">{{ v.uploaded_at[:19].replace('T', ' ') }}</td>
+                <td>
+                    {% if v.is_deployed %}
+                        <span class="badge badge-green">✓ Deployed</span>
+                    {% else %}
+                        <span class="badge badge-slate">Inactive</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if not v.is_deployed %}
+                    <form method="POST" action="{{ url_for('admin_models_deploy', version_id=v.id) }}"
+                          style="display:inline;"
+                          onsubmit="return confirm('Deploy v{{ v.version_string }}? Model aktif akan langsung diganti.');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-primary" style="padding:5px 14px; font-size:0.82rem;">Deploy</button>
+                    </form>
+                    {% else %}
+                        <span style="color:#94a3b8; font-size:0.85rem;">Aktif</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="text-align:center; padding:40px; color:#94a3b8;">
+        Belum ada model yang diunggah.
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

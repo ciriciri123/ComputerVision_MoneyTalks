@@ -1,6 +1,7 @@
 import os
 import io
 import re
+import threading
 from collections import Counter
 import cv2
 import numpy as np
@@ -16,6 +17,7 @@ _models_loaded = False
 _kmeans_model = None
 _tfidf = None
 _svm = None
+_reload_lock = threading.Lock()
 
 DENOMINATION_MAP = {
     '100000': 'idr_100000',
@@ -193,11 +195,24 @@ def load_models():
     bovw_path = os.path.join(MODELS_DIR, 'bovw_dictionary.pkl')
     tfidf_path = os.path.join(MODELS_DIR, 'tfidf_scaler.pkl')
     svm_path = os.path.join(MODELS_DIR, 'svm_model.pkl')
-    
+
     _kmeans_model = joblib.load(bovw_path)
     _tfidf = joblib.load(tfidf_path)
     _svm = joblib.load(svm_path)
     _models_loaded = True
+
+
+def reload_models(bovw_path: str, tfidf_path: str, svm_path: str) -> None:
+    """Hot-swap the in-memory models from new .pkl paths. Thread-safe."""
+    global _models_loaded, _kmeans_model, _tfidf, _svm
+    with _reload_lock:
+        new_kmeans = joblib.load(bovw_path)
+        new_tfidf  = joblib.load(tfidf_path)
+        new_svm    = joblib.load(svm_path)
+        _kmeans_model = new_kmeans
+        _tfidf        = new_tfidf
+        _svm          = new_svm
+        _models_loaded = True
 
 def preprocess_image(image_bytes):
     np_img = np.frombuffer(image_bytes, np.uint8)

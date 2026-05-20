@@ -223,79 +223,95 @@
             speakOut("Kamera dimatikan.");
         });
 
-        function speakOut(text) {
-            // Web Speech API for zero-latency client-side audio
-            if (!window.speechSynthesis) return;
-            
-            // Only speak if we aren't already speaking it to prevent overlapping spam
-            if (window.speechSynthesis.speaking) return;
+        let _ttsAudio = null;
 
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.lang = "id-ID";
-            utterance.rate = 1.0; 
-            window.speechSynthesis.speak(utterance);
+        function speakOut(text) {
+            if (window.speechSynthesis) {
+                // Primary: Web Speech API (zero-latency, client-side)
+                if (window.speechSynthesis.speaking) return;
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = "id-ID";
+                utterance.rate = 1.0;
+                window.speechSynthesis.speak(utterance);
+            } else {
+                // Fallback: gTTS server-side (FR-03)
+                if (_ttsAudio && !_ttsAudio.paused) return;
+                _ttsAudio = new Audio("/api/tts?text=" + encodeURIComponent(text));
+                _ttsAudio.play().catch(() => {});
+            }
+        }
+
+        // FR-04: async upload with exponential-backoff retry (500ms → 1s → 2s)
+        async function uploadScan(blob, denomination, confidence) {
+            const BACKOFF = [500, 1000, 2000];
+            for (let i = 0; i < BACKOFF.length; i++) {
+                try {
+                    const fd = new FormData();
+                    fd.append('frame', blob, 'scan.jpg');
+                    fd.append('denomination', denomination);
+                    fd.append('confidence', confidence);
+                    const r = await fetch('/api/upload-image', { method: 'POST', body: fd });
+                    if (r.ok) return;
+                } catch (_) {}
+                if (i < BACKOFF.length - 1)
+                    await new Promise(res => setTimeout(res, BACKOFF[i]));
+            }
         }
 
         async function captureAndSendFrame() {
             if (!video.videoWidth) return;
 
-            // Draw to canvas
             const canvas = document.createElement("canvas");
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
-            const ctx = canvas.getContext("2d");
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            canvas.getContext("2d").drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            // Convert canvas to Blob via fetch wrapper or native method -> form boundary
             canvas.toBlob(async (blob) => {
                 const formData = new FormData();
                 formData.append("frame", blob, "frame.jpg");
 
                 try {
-                    const response = await fetch("/api/detect", {
-                        method: "POST",
-                        body: formData
-                    });
-                    
+                    const response = await fetch("/api/detect", { method: "POST", body: formData });
+
                     if (response.ok) {
                         const data = await response.json();
-                        // Draw CV box
+
+                        // Draw CV bounding box
                         const cvBox = document.getElementById('cv-box');
                         if (data.box && data.box.length === 4 && data.box[2] > 0) {
                             cvBox.style.display = 'block';
-                            cvBox.style.left = (data.box[0] * 100) + '%';
-                            cvBox.style.top = (data.box[1] * 100) + '%';
-                            cvBox.style.width = (data.box[2] * 100) + '%';
+                            cvBox.style.left   = (data.box[0] * 100) + '%';
+                            cvBox.style.top    = (data.box[1] * 100) + '%';
+                            cvBox.style.width  = (data.box[2] * 100) + '%';
                             cvBox.style.height = (data.box[3] * 100) + '%';
                         } else {
                             cvBox.style.display = 'none';
                         }
-                        
+
                         if (data.valid) {
-                            // High confidence (>= 0.75)
                             resultText.innerText = data.message;
                             resultText.style.color = "#008CBA";
-                            
-                            // Prevent repeating the same label rapidly
-                            if (lastDetectedLabel !== data.message || !window.speechSynthesis.speaking) {
+
+                            if (lastDetectedLabel !== data.message || !window.speechSynthesis?.speaking) {
                                 speakOut(data.message);
                                 lastDetectedLabel = data.message;
                             }
+
+                            // FR-04: fire-and-forget upload (failures don't block detection)
+                            uploadScan(blob, data.raw_label, data.confidence).catch(() => {});
                         } else {
-                            // Low confidence or invalid
                             resultText.innerText = data.message;
-                            resultText.style.color = "#d9534f"; // Red to show attention needed
+                            resultText.style.color = "#d9534f";
                             speakOut(data.message);
                             lastDetectedLabel = "";
                         }
-                        
                     } else {
-                        throw new Error("API responded with an error");
+                        throw new Error("API error");
                     }
                 } catch (e) {
                     console.error("Inference Error:", e);
                 }
-            }, "image/jpeg", 0.85); // Compress to save bandwidth
+            }, "image/jpeg", 0.85);
         }
     </script>
 </body>
