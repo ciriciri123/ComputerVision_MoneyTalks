@@ -12,11 +12,11 @@ def extract_orb_and_color_features(images, max_features=2000):
     
     print(f"[*] Memulai ekstraksi ORB & Warna dari {len(images)} gambar...")
     for img in images:
-        # 1. Fitur warna (HSV Histogram)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        # Hitung histogram 3D HSV (Hue, Saturation, Value)
         hist = cv2.calcHist([hsv], [0, 1, 2], None, [8, 8, 8], [0, 180, 0, 256, 0, 256])
-        cv2.normalize(hist, hist)
+        
+        cv2.normalize(hist, hist, norm_type=cv2.NORM_L2)
+        
         color_histograms.append(hist.flatten())
 
         # 2. Fitur tektur (ORB + CLAHE)

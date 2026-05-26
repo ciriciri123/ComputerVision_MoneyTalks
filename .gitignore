@@ -4,3 +4,9 @@ __pycache__/
 
 # Dataset
 data/
+
+# Secrets
+.env
+
+# Test artifacts
+.pytest_cache/

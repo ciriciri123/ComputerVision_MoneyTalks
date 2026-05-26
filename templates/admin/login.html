@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Login — MoneyTalks</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a;
+               display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .card { background: white; border-radius: 16px; padding: 40px; width: 100%; max-width: 400px; box-shadow: 0 20px 40px rgba(0,0,0,.3); }
+        h1 { font-size: 1.5rem; color: #0f172a; margin-bottom: 6px; }
+        .subtitle { color: #64748b; font-size: 0.9rem; margin-bottom: 28px; }
+        .form-group { margin-bottom: 18px; }
+        label { display: block; font-size: 0.85rem; font-weight: 600; color: #475569; margin-bottom: 6px; }
+        input { width: 100%; padding: 10px 14px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 0.95rem; outline: none; }
+        input:focus { border-color: #0ea5e9; box-shadow: 0 0 0 3px rgba(14,165,233,.15); }
+        .btn { width: 100%; padding: 12px; background: #0ea5e9; color: white; border: none;
+               border-radius: 8px; font-size: 1rem; font-weight: 600; cursor: pointer; margin-top: 8px; }
+        .btn:hover { background: #0284c7; }
+        .error { background: #fee2e2; color: #991b1b; border-radius: 8px; padding: 10px 14px; font-size: 0.9rem; margin-bottom: 18px; }
+        .back { text-align: center; margin-top: 20px; font-size: 0.85rem; color: #64748b; }
+        .back a { color: #0ea5e9; }
+    </style>
+</head>
+<body>
+<div class="card">
+    <h1>💵 MoneyTalks</h1>
+    <p class="subtitle">Admin Login</p>
+
+    {% if error %}
+        <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" required autofocus placeholder="admin@example.com">
+        </div>
+        <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required placeholder="••••••••">
+        </div>
+        <button type="submit" class="btn">Masuk</button>
+    </form>
+    <div class="back"><a href="{{ url_for('index') }}">← Kembali ke aplikasi</a></div>
+</div>
+</body>
+</html>
