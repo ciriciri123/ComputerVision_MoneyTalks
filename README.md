@@ -1,96 +1,184 @@
-# ComputerVision_MoneyTalks
+# MoneyTalks — Web-based Currency Detector for the Visually Impaired
 
-MoneyTalks is a Computer Vision project designed to recognize and classify currency/money from images. It compares a Baseline approach with a Proposed enhanced approach using Bag of Visual Words (BoVW), feature fusion, and Support Vector Machines (SVM). 
+MoneyTalks is a browser-first assistive technology application that enables visually impaired users to independently identify Indonesian Rupiah banknote denominations in real time. The device camera streams to a Flask backend, where a classical computer vision pipeline (ORB → BoVW → SVM + Tesseract OCR) classifies the denomination and returns an audio announcement via the Web Speech API.
 
-The application also includes a web interface component using Streamlit and a backend service structure.
+**Team:**
+- Antonio Darren Novianto Saputra — 2802554634
+- Dominicius Francis Ang Gunadi — 2802561293
+- Frans Sebastian Winata — 2802489414
+- Garren Tanavaro — 2802516182
+- Riccy Riandy Intan — 2802547856
+
+---
+
+## Features
+
+- Real-time banknote detection via rear camera (MediaDevices API)
+- SVM classifier fusing ORB texture features (BoVW + TF-IDF) with HSV colour histograms
+- Tesseract OCR secondary prediction with confidence-based decision fusion
+- Audio output via Web Speech API (gTTS server-side fallback)
+- Scan persistence to Supabase (image storage + PostgreSQL metadata)
+- Admin panel: scan browser, model version management with zero-downtime hot-swap
+
+---
 
 ## Project Structure
 
 ```
-ComputerVision_MoneyTalks/
-├── app/                  # Web application backend and services
-│   ├── auth.py           # Authentication logic
-│   ├── routes.py         # API or app routes
-│   └── services/         # Core services including model inference and Supabase client
-│       ├── inference.py
-│       └── supabase_client.py
-├── models/               # Saved trained models and preprocessors (.pkl)
-│   ├── baseline/         # Baseline model artifacts (BoVW dictionary, SVM model)
-│   └── proposed/         # Proposed model artifacts (BoVW dictionary, Scaler, TF-IDF, SVM)
-├── src/                  # Source code for training and evaluation
-│   ├── baseline/         # Baseline methodology scripts
+MoneyTalks/
+├── app.py                  # Flask entry point + all routes
+├── inference.py            # SVM + OCR inference pipeline
+├── supabase_client.py      # Supabase DB & Storage operations
+├── requirements.txt
+├── .env.example            # Environment variable template
+│
+├── src/
+│   ├── baseline/           # Baseline training pipeline
+│   │   ├── preprocessing.py
 │   │   ├── features.py
-│   │   ├── model.py
-│   │   └── preprocessing.py
-│   └── proposed/         # Proposed improved methodology scripts
+│   │   └── model.py
+│   └── proposed/           # Proposed training pipeline
+│       ├── preprocessing.py
 │       ├── features.py
-│       ├── model.py
-│       └── preprocessing.py
-├── data/                 # Dataset directory (create this and add your data here)
-├── app.py                # Main application entry point
-├── requirements.txt      # Project dependencies
-└── README.md             # This file
-
+│       └── model.py
+│
+├── scripts/
+│   ├── augment.py          # Balanced data augmentation
+│   └── clean_augment.py    # Remove augmented files
+│
+├── models/
+│   ├── baseline/           # bovw_dictionary.pkl, svm_model.pkl
+│   └── proposed/           # bovw_dictionary.pkl, svm_model.pkl, tfidf_scaler.pkl
+│
+├── templates/
+│   ├── index.html          # Main camera detection UI
+│   ├── test.html           # Static image upload test page
+│   └── admin/              # Admin panel templates
+│
+├── tests/                  # pytest unit tests (89 tests)
+│   ├── conftest.py
+│   ├── test_app.py
+│   ├── test_inference.py
+│   ├── test_preprocessing.py
+│   └── test_features.py
+│
+├── migrations/
+│   └── 001_initial_schema.sql  # Supabase DB schema
+│
+└── docs/
+    ├── PRD.md
+    ├── MoneyTalks_PRD_v2.docx
+    └── Money Talks_ Computer Vision Project.docx
 ```
+
+---
 
 ## Methodology
 
-### 1. Baseline Model
-The baseline approach uses traditional computer vision techniques to classify images:
-*   **Feature Extraction:** ORB (Oriented FAST and Rotated BRIEF) descriptors.
-*   **Representation:** Bag of Visual Words (BoVW) utilizing KMeans clustering (150 clusters).
-*   **Classification:** Multi-class Support Vector Machine (SVM) with RBF kernel and a K-Nearest Neighbors (KNN) comparison.
+### Baseline Model
+- **Preprocessing:** Resize → Grayscale → Gaussian Blur
+- **Features:** ORB descriptors → BoVW (KMeans, 800 clusters)
+- **Classifier:** SVM with linear kernel
 
-### 2. Proposed Model
-The proposed model enhances the baseline with feature fusion and advanced weighting to improve accuracy:
-*   **Feature Extraction:** Fuses ORB descriptors with Color features.
-*   **Representation:** Bag of Visual Words (BoVW) (800 clusters).
-*   **Weighting & Scaling:** Applies TF-IDF (Term Frequency-Inverse Document Frequency) weighting to the BoVW histograms and normalizes the fused features using `StandardScaler`.
-*   **Classification:** Tuned Multi-class SVM with RBF kernel and balanced class weights.
+### Proposed Model
+- **Preprocessing:** Resize (800×400) → BGR colour retained
+- **Features:** ORB + CLAHE → BoVW (800 clusters) with TF-IDF weighting (×3.0) fused with HSV colour histogram (8×8×8)
+- **Classifier:** SVM with linear kernel, balanced class weights
+- **Inference:** Smart bounding box crop → SVM prediction → Tesseract OCR on 2 ROIs → confidence-based decision fusion
 
-## Requirements
+### Data Augmentation (`scripts/augment.py`)
+Balanced oversampling via: dark (α=0.75), bright (α=1.1), Gaussian blur (5×5), random noise, and 180° rotation.
 
-The project uses the following key libraries (see `requirements.txt` for details):
-*   `opencv-python`
-*   `scikit-learn`
-*   `numpy`
-*   `pytesseract`
-*   `streamlit` & `streamlit-webrtc`
-*   `pytest`
+---
 
-### Installation
+## Setup
 
-1. Clone the repository and navigate to the project directory.
-2. Create and activate a virtual environment (optional but recommended).
-3. Install the dependencies:
+### 1. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
+> **Windows:** Tesseract must be installed separately from [github.com/UB-Mannheim/tesseract](https://github.com/UB-Mannheim/tesseract/wiki). Update the path in `inference.py` line 11 if needed.
 
-### Training the Models
-
-Ensure you have your dataset placed in a `data/` directory at the root level before training. The dataset should be structured in subfolders per class.
-
-**To train the Baseline Model:**
+### 2. Configure environment variables
 ```bash
-python src/baseline/model.py
+cp .env.example .env
+```
+Fill in `.env` with your Supabase credentials (see `.env.example` for details).
+
+### 3. Set up Supabase
+1. Run `migrations/001_initial_schema.sql` in the Supabase SQL editor
+2. Create two private storage buckets: `scanned-images` and `model-files`
+3. Seed an admin account:
+```bash
+python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt(12)).decode())"
+```
+```sql
+INSERT INTO "Administrator" (email, password_hash) VALUES ('you@example.com', '<hash>');
 ```
 
-**To train the Proposed Model:**
+### 4. Train the models (optional — pre-trained models included)
+Place your dataset in `data/` with subfolders per class (`idr_1000`, `idr_2000`, ..., `idr_100000`).
+
 ```bash
+# Proposed model (recommended)
 python src/proposed/model.py
+
+# Baseline model
+python src/baseline/model.py
+
+# Data augmentation
+python scripts/augment.py
 ```
 
-The trained models and dictionaries will be automatically saved in their respective folders under the `models/` directory.
+---
 
-### Running the Application
+## Running the Application
 
-*(Instructions for running the web application will go here once `app.py` is fully implemented)*
 ```bash
-streamlit run app.py
+python app.py
 ```
-*(or depending on backend setup, `python app.py`)*
 
-hehehe halooo guys
+| URL | Description |
+|---|---|
+| `http://localhost:5000` | Main camera detection app |
+| `http://localhost:5000/test` | Static image upload test |
+| `http://localhost:5000/admin/login` | Admin panel |
+
+---
+
+## Running Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+89 tests covering: OCR text normalisation, Levenshtein distance, denomination extraction, image preprocessing, BoVW histogram generation, ORB feature extraction, and all Flask API endpoints.
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/detect` | Classify a banknote frame |
+| `POST` | `/api/upload-image` | Persist a scan to Supabase |
+| `GET` | `/api/tts?text=...` | gTTS audio fallback |
+
+### `POST /api/detect` response
+```json
+{
+  "valid": true,
+  "message": "Lima Puluh Ribu Rupiah",
+  "raw_label": "idr_50000",
+  "confidence": 0.923,
+  "box": [0.12, 0.08, 0.76, 0.84]
+}
+```
+
+---
+
+## Dataset
+
+[Rupiah Banknotes Dataset](https://github.com/mkaspulanwar/rupiah-banknotes-dataset) by mkaspulanwar — MIT License.  
+Classes: IDR 1,000 / 2,000 / 5,000 / 10,000 / 20,000 / 50,000 / 100,000.
