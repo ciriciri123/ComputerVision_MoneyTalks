@@ -1,8 +1,21 @@
 # Python compiled files
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
 
-# Dataset
+# Distribution / build
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Dataset (large, not versioned)
 data/
 
 # Secrets
@@ -10,3 +23,13 @@ data/
 
 # Test artifacts
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Temporary uploads / audio
+uploads/
+*.mp3
+
+# OS artifacts
+.DS_Store
+Thumbs.db
