@@ -8,6 +8,7 @@ import numpy as np
 import joblib
 import pytesseract
 from PIL import Image
+from crop_utils import get_denomination_crops
 
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
@@ -287,7 +288,26 @@ def predict_currency(image_bytes):
 
     try:
         img = preprocess_image(image_bytes)
-        keypoints, descriptors, color_hist, box_coords, ocr_crop = get_orb_and_color_features(img)
+
+        # --- Smart crop: keypoint bbox → contour fallback → zone crops ---
+        crops      = get_denomination_crops(img)
+        box_coords = crops["box_coords"]
+        svm_input  = crops["svm_crop"]          # 800×400, ready for feature extraction
+
+        # --- Feature extraction from SVM crop ---
+        clahe        = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray_svm     = cv2.cvtColor(svm_input, cv2.COLOR_BGR2GRAY)
+        enhanced_svm = clahe.apply(gray_svm)
+        blurred_svm  = cv2.GaussianBlur(enhanced_svm, (5, 5), 0)
+        orb          = cv2.ORB_create(nfeatures=2000)
+        keypoints, descriptors = orb.detectAndCompute(blurred_svm, None)
+        if descriptors is None:
+            descriptors = np.array([])
+
+        hsv  = cv2.cvtColor(svm_input, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1, 2], None, [8, 8, 8], [0, 180, 0, 256, 0, 256])
+        cv2.normalize(hist, hist)
+        color_hist = hist.flatten()
 
         if len(descriptors) < 50:
             return {"label": "none", "confidence": 0.0}
@@ -296,47 +316,30 @@ def predict_currency(image_bytes):
         bovw_raw = get_bovw_histogram(descriptors, _kmeans_model)
         bovw_tfidf = _tfidf.transform([bovw_raw]).toarray()[0]
         bovw_tfidf = bovw_tfidf * 3.0
-        
+
         fused = np.hstack((bovw_tfidf, color_hist))
         raw_label = _svm.predict([fused])[0]
         svm_label = str(raw_label)
-        
+
         proba = _svm.predict_proba([fused])[0]
         confidence = float(np.max(proba))
         sorted_proba = np.sort(proba)
         svm_margin = float(sorted_proba[-1] - sorted_proba[-2]) if len(sorted_proba) >= 2 else float(confidence)
 
-        # --- 2. PREDIKSI OCR ---
-        ocr_label = None
+        # --- 2. PREDIKSI OCR — try denomination zones in priority order ---
+        # bottom_left → bottom_right → center_left → full bill
+        # Each zone targets where the denomination number is actually printed.
+        ocr_label      = None
         ocr_vote_ratio = 0.0
         try:
-            ocr_label_1, ocr_vote_ratio_1, ocr_pass_count_1 = _predict_with_ocr(ocr_crop)
-            
-            if ocr_vote_ratio_1 < 0.25:
-                ocr_crop_flipped = cv2.rotate(ocr_crop, cv2.ROTATE_180)
-                ocr_label_2, ocr_vote_ratio_2, ocr_pass_count_2 = _predict_with_ocr(ocr_crop_flipped)
-                
-                if ocr_label_2 and ocr_vote_ratio_2 > ocr_vote_ratio_1:
-                    ocr_label = ocr_label_2
-                    ocr_vote_ratio = ocr_vote_ratio_2
-                else:
-                    ocr_label = ocr_label_1
-                    ocr_vote_ratio = ocr_vote_ratio_1
-            else:
-                ocr_label = ocr_label_1
-                ocr_vote_ratio = ocr_vote_ratio_1
-
-            if (not ocr_label or ocr_vote_ratio < 0.30) and ocr_crop is not img:
-                full_frame_crop = img.copy()
-                if full_frame_crop.shape[0] > full_frame_crop.shape[1]:
-                    full_frame_crop = cv2.rotate(full_frame_crop, cv2.ROTATE_90_CLOCKWISE)
-                ocr_label_ff, ocr_vote_ratio_ff, _ = _predict_with_ocr(full_frame_crop)
-                ocr_vote_ratio_ff_adj = ocr_vote_ratio_ff * 0.70  # noise penalty
-                if ocr_label_ff and ocr_vote_ratio_ff_adj > (ocr_vote_ratio or 0):
-                    ocr_label = ocr_label_ff
-                    ocr_vote_ratio = ocr_vote_ratio_ff_adj
-                    print(f"[OCR] Full-frame fallback used: {ocr_label_ff} (ratio={ocr_vote_ratio_ff:.2f})")
-                
+            for zone_key in ("ocr_bottom_left", "ocr_bottom_right",
+                             "ocr_center_left", "ocr_full"):
+                lbl, ratio, _ = _predict_with_ocr(crops[zone_key])
+                if lbl and ratio >= 0.30:
+                    ocr_label      = lbl
+                    ocr_vote_ratio = ratio
+                    print(f"[OCR] hit on zone '{zone_key}': {lbl} (ratio={ratio:.2f})")
+                    break
         except Exception as e:
             print(f"[OCR WARNING] {e}")
 
@@ -431,8 +434,17 @@ def predict_currency(image_bytes):
             'label': final_label,
             'confidence': float(confidence)
         }
-        if box_coords: result['box'] = box_coords
-            
+        if box_coords:
+            result['box'] = box_coords
+
+        # Encode the full bill crop for storage (landscape, background removed)
+        try:
+            _, crop_enc = cv2.imencode('.jpg', crops["ocr_full"],
+                                       [cv2.IMWRITE_JPEG_QUALITY, 85])
+            result['crop_bytes'] = crop_enc.tobytes()
+        except Exception:
+            pass
+
         return result
         
     except Exception as e:

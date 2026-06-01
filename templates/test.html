@@ -3,183 +3,288 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MoneyTalks - Test Upload</title>
+    <title>Test Upload — MoneyTalks</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <style>
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            padding: 30px; 
-            max-width: 600px; 
-            margin: auto; 
-            background-color: #f9fafb;
-            color: #1f2937;
+        main {
+            min-height: calc(100vh - 56px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 48px 24px 80px;
         }
-        .container {
-            background: white;
-            padding: 30px;
-            border-radius: 12px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-        h2 { margin-top: 0; color: #10B981; }
-        .upload-area {
-            margin: 20px 0;
-            padding: 15px;
-            border: 2px dashed #d1d5db;
-            border-radius: 8px;
-            text-align: center;
-        }
-        input[type="file"] { margin-bottom: 15px; }
-        button {
-            background-color: #10B981;
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 16px;
-            font-weight: bold;
+
+        .page-wrap {
             width: 100%;
+            max-width: 580px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
         }
-        button:hover { background-color: #059669; }
-        
-        /* Wadah untuk menahan gambar dan kotak merah */
-        .image-container {
+
+        .page-header {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
+            color: var(--fg-1);
+            margin: 0;
+        }
+
+        .page-sub {
+            font-size: 14px;
+            color: var(--fg-3);
+            margin: 0;
+        }
+
+        /* Upload area */
+        .upload-area {
+            border: 1px dashed var(--hairline-strong);
+            border-radius: var(--r-lg);
+            padding: 28px 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 14px;
+            background: var(--surface-1);
+            box-shadow: var(--shadow-inset);
+            transition: border-color var(--duration) var(--ease);
+        }
+        .upload-area:hover { border-color: var(--hairline-tertiary); }
+
+        .upload-label {
+            font-size: 13px;
+            color: var(--fg-3);
+            letter-spacing: 0;
+            text-transform: none;
+            margin: 0;
+        }
+
+        input[type=file]#fileInput {
+            width: auto;
+            background: transparent;
+            border: none;
+            padding: 0;
+            font-size: 13px;
+            color: var(--fg-3);
+            box-shadow: none;
+        }
+
+        /* Image preview container */
+        .preview-wrap {
             position: relative;
             display: inline-block;
             max-width: 100%;
-            margin-top: 20px;
         }
-        .preview { 
-            max-width: 100%; 
-            border-radius: 8px; 
-            display: none; 
-            border: 1px solid #e5e7eb;
+
+        #previewImage {
+            max-width: 100%;
+            border-radius: var(--r-xl);
+            display: none;
+            border: 1px solid var(--hairline);
         }
-        
-        /* GAYA KOTAK MERAH */
+
         .cv-box {
             position: absolute;
-            border: 3px solid #EF4444; 
-            box-shadow: 0 0 10px rgba(239, 68, 68, 0.5);
+            border: 2px solid var(--accent);
+            box-shadow: 0 0 0 1px rgba(94,106,210,0.25), 0 0 16px rgba(94,106,210,0.15);
             pointer-events: none;
             z-index: 10;
             display: none;
-            border-radius: 4px;
+            border-radius: var(--r-xs);
         }
 
-        .result { 
-            margin-top: 20px; 
-            padding: 20px; 
-            border-radius: 8px; 
-            background: #ecfdf5; 
-            border: 1px solid #10B981;
-            display: none; 
+        /* Result card */
+        .result-card {
+            background: var(--surface-1);
+            border: 1px solid var(--hairline);
+            border-radius: var(--r-lg);
+            padding: 20px 24px;
+            box-shadow: var(--shadow-inset);
+            display: none;
         }
-        .result p { margin: 8px 0; }
-        .loader { display: none; color: #6b7280; font-style: italic; text-align: center; margin-top: 15px;}
+        .result-card.valid   { border-color: rgba(96,165,250,0.3); }
+        .result-card.invalid { border-color: rgba(251,146,60,0.3); }
+
+        .result-title {
+            font-size: 11px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--fg-3);
+            margin: 0 0 14px;
+        }
+
+        .result-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--hairline);
+            font-size: 14px;
+        }
+        .result-row:last-child { border-bottom: none; padding-bottom: 0; }
+
+        .result-key  { color: var(--fg-3); }
+        .result-val  { color: var(--fg-1); font-weight: 500; font-family: var(--font-mono); font-size: 13px; }
+        .result-main { font-size: 18px; font-weight: 600; letter-spacing: -0.3px; }
+
+        .result-val.valid-text   { color: #60a5fa; }   /* blue   */
+        .result-val.invalid-text { color: #fb923c; }   /* orange */
+
+        /* Loading */
+        .loader {
+            display: none;
+            font-size: 13px;
+            color: var(--fg-3);
+            font-family: var(--font-mono);
+            text-align: center;
+            padding: 8px 0;
+        }
     </style>
 </head>
 <body>
 
-    <div class="container">
-        <h2>🛠️ Test Upload Gambar</h2>
-        <p>Halaman khusus untuk mengetes akurasi model SVM dengan gambar statis.</p>
+<!-- ── Navigation ────────────────────────────────────────────── -->
+<nav class="nav">
+    <div class="nav-left">
+        <a href="{{ url_for('index') }}" class="nav-brand">
+            <span class="nav-glyph">◆</span>
+            MoneyTalks
+        </a>
+        <div class="nav-links">
+            <a href="{{ url_for('test_page') }}" class="nav-link active">Test Upload</a>
+        </div>
+    </div>
+    <div class="nav-right">
+        <a href="{{ url_for('index') }}"     class="btn btn-secondary" style="font-size:13px;padding:6px 12px;">Camera</a>
+        <a href="{{ url_for('admin_login') }}" class="btn btn-outline"  style="font-size:13px;padding:6px 12px;">Admin</a>
+    </div>
+</nav>
 
-        <div class="upload-area">
-            <input type="file" id="fileInput" accept="image/jpeg, image/png, image/jpg">
-            <button onclick="uploadImage()">Analisis Uang</button>
-            <p id="loading" class="loader">Memproses gambar dengan AI...</p>
+<!-- ── Main ──────────────────────────────────────────────────── -->
+<main>
+    <div class="page-wrap">
+
+        <div class="page-header">
+            <span class="eyebrow">Static Image Testing</span>
+            <h1 class="page-title" style="margin:0;">Test model accuracy</h1>
+            <p class="page-sub">Upload a static banknote image to test SVM inference without the camera.</p>
         </div>
 
-        <div class="image-container">
-            <img id="previewImage" class="preview" alt="Preview" />
+        <!-- Upload -->
+        <div class="upload-area">
+            <p class="upload-label">Select a JPEG or PNG image of a Rupiah banknote.</p>
+            <input type="file" id="fileInput" accept="image/jpeg,image/png,image/jpg">
+            <button onclick="uploadImage()" class="btn btn-primary">Analyse image</button>
+        </div>
+
+        <p id="loading" class="loader">Analysing with SVM pipeline...</p>
+
+        <!-- Preview -->
+        <div class="preview-wrap" id="previewWrap" style="display:none;">
+            <img id="previewImage" alt="Preview" />
             <div id="cv-box" class="cv-box"></div>
         </div>
 
-        <div id="resultBox" class="result">
-            <h3 style="margin-top: 0; color: #047857;">Hasil Prediksi</h3>
-            <p><strong>Raw Label (SVM):</strong> <span id="resLabel">-</span></p>
-            <p><strong>Confidence:</strong> <span id="resConf">-</span></p>
-            <p><strong>Pesan ke User:</strong> <strong style="color: #10B981;"><span id="resMsg">-</span></strong></p>
+        <!-- Result -->
+        <div id="resultBox" class="result-card">
+            <p class="result-title">Prediction result</p>
+            <div class="result-row">
+                <span class="result-key">Denomination</span>
+                <span class="result-val result-main" id="resMsg">—</span>
+            </div>
+            <div class="result-row">
+                <span class="result-key">SVM label</span>
+                <span class="result-val" id="resLabel">—</span>
+            </div>
+            <div class="result-row">
+                <span class="result-key">Confidence</span>
+                <span class="result-val" id="resConf">—</span>
+            </div>
         </div>
+
     </div>
+</main>
 
-    <script>
-        const fileInput = document.getElementById('fileInput');
-        const previewImage = document.getElementById('previewImage');
-        const resultBox = document.getElementById('resultBox');
-        const loading = document.getElementById('loading');
-        const cvBox = document.getElementById('cv-box');
+<script>
+    const fileInput    = document.getElementById("fileInput");
+    const previewImage = document.getElementById("previewImage");
+    const previewWrap  = document.getElementById("previewWrap");
+    const resultBox    = document.getElementById("resultBox");
+    const loading      = document.getElementById("loading");
+    const cvBox        = document.getElementById("cv-box");
 
-        // Memunculkan preview gambar sebelum dikirim
-        fileInput.addEventListener('change', function() {
-            const file = this.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    previewImage.src = e.target.result;
-                    previewImage.style.display = 'block';
-                    resultBox.style.display = 'none'; 
-                    cvBox.style.display = 'none'; // Sembunyikan kotak merah lama
-                }
-                reader.readAsDataURL(file);
-            }
-        });
+    fileInput.addEventListener("change", function () {
+        const file = this.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            previewImage.src = e.target.result;
+            previewImage.style.display = "block";
+            previewWrap.style.display  = "inline-block";
+            resultBox.style.display    = "none";
+            resultBox.className        = "result-card";
+            cvBox.style.display        = "none";
+        };
+        reader.readAsDataURL(file);
+    });
 
-        async function uploadImage() {
-            const file = fileInput.files[0];
-            if (!file) {
-                alert("Silakan pilih gambar uang terlebih dahulu!");
-                return;
-            }
+    async function uploadImage() {
+        const file = fileInput.files[0];
+        if (!file) { alert("Pilih gambar terlebih dahulu."); return; }
 
-            const formData = new FormData();
-            formData.append('frame', file);
+        const formData = new FormData();
+        formData.append("frame", file);
 
-            loading.style.display = 'block';
-            resultBox.style.display = 'none';
-            cvBox.style.display = 'none';
+        loading.style.display   = "block";
+        resultBox.style.display = "none";
+        cvBox.style.display     = "none";
 
-            try {
-                const response = await fetch('/api/detect', {
-                    method: 'POST',
-                    body: formData
-                });
+        try {
+            const response = await fetch("/api/detect", { method: "POST", body: formData });
+            const data     = await response.json();
+            loading.style.display = "none";
 
-                const data = await response.json();
-                loading.style.display = 'none';
+            if (response.ok) {
+                resultBox.style.display = "block";
+                document.getElementById("resLabel").innerText = data.raw_label || "—";
+                document.getElementById("resConf").innerText  = (data.confidence * 100).toFixed(2) + "%";
 
-                if (response.ok) {
-                    resultBox.style.display = 'block';
-                    document.getElementById('resLabel').innerText = data.raw_label || 'Tidak Terdeteksi';
-                    
-                    const confPercent = (data.confidence * 100).toFixed(2);
-                    document.getElementById('resConf').innerText = confPercent + '%';
-                    document.getElementById('resMsg').innerText = data.message || '-';
-                    
-                    // LOKASI MENGGAMBAR KOTAK MERAH!
-                    if (data.box && data.box.length === 4 && data.box[2] > 0) {
-                        cvBox.style.display = 'block';
-                        cvBox.style.left = (data.box[0] * 100) + '%';
-                        cvBox.style.top = (data.box[1] * 100) + '%';
-                        cvBox.style.width = (data.box[2] * 100) + '%';
-                        cvBox.style.height = (data.box[3] * 100) + '%';
-                    }
+                const msgEl = document.getElementById("resMsg");
+                msgEl.innerText = data.message || "—";
 
-                    if(data.valid) {
-                        resultBox.style.background = '#ecfdf5';
-                        resultBox.style.borderColor = '#10B981';
-                    } else {
-                        resultBox.style.background = '#fef2f2';
-                        resultBox.style.borderColor = '#ef4444';
-                    }
+                if (data.valid) {
+                    resultBox.className  = "result-card valid";
+                    msgEl.className      = "result-val result-main valid-text";
                 } else {
-                    alert("Error dari Server: " + data.error);
+                    resultBox.className  = "result-card invalid";
+                    msgEl.className      = "result-val result-main invalid-text";
                 }
-            } catch (e) {
-                loading.style.display = 'none';
-                alert("Gagal menghubungi server. Error: " + e.message);
+
+                // Bounding box
+                if (data.box && data.box.length === 4 && data.box[2] > 0) {
+                    cvBox.style.display = "block";
+                    cvBox.style.left    = (data.box[0] * 100) + "%";
+                    cvBox.style.top     = (data.box[1] * 100) + "%";
+                    cvBox.style.width   = (data.box[2] * 100) + "%";
+                    cvBox.style.height  = (data.box[3] * 100) + "%";
+                }
+            } else {
+                alert("Server error: " + (data.error || response.statusText));
             }
+        } catch (e) {
+            loading.style.display = "none";
+            alert("Connection error: " + e.message);
         }
-    </script>
+    }
+</script>
+
 </body>
 </html>

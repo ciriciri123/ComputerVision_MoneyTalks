@@ -1,5 +1,6 @@
 import io
 import os
+import threading
 import zipfile
 import tempfile
 
@@ -19,6 +20,25 @@ load_dotenv()
 
 app = Flask(__name__)
 app.config['JSON_SORT_KEYS'] = False
+
+
+# ── Timezone filter ───────────────────────────────────────────────────────────
+
+from datetime import timedelta
+
+_WIB = timedelta(hours=7)   # UTC+7 Western Indonesian Time
+
+@app.template_filter('to_wib')
+def to_wib(ts_str: str) -> str:
+    """Convert a Supabase UTC ISO timestamp to WIB (UTC+7) for display."""
+    if not ts_str:
+        return '—'
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+        return dt.astimezone(timezone(_WIB)).strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return ts_str[:19].replace('T', ' ')
 app.config['SECRET_KEY'] = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-change-me')
 app.config['MAX_CONTENT_LENGTH'] = 600 * 1024 * 1024  # 600 MB upload limit
 
@@ -89,6 +109,9 @@ def detect():
     if "error" in result:
         return jsonify({"error": result["error"]}), 500
 
+    # Extract crop bytes before building JSON response (not sent to client)
+    crop_bytes = result.pop('crop_bytes', None)
+
     label      = result['label']
     confidence = result['confidence']
     friendly   = AMOUNTS.get(label, "Uang tidak dikenali")
@@ -100,6 +123,15 @@ def detect():
         body['valid']   = True
         if "box" in result:
             body["box"] = result["box"]
+
+        # Fire-and-forget: save the cropped image to Supabase in background
+        if crop_bytes and supabase_client.is_configured():
+            def _bg_upload(cb=crop_bytes, lbl=label, conf=confidence):
+                try:
+                    supabase_client.upload_scan(cb, lbl, conf)
+                except Exception as e:
+                    print(f"[upload] background upload failed: {e}")
+            threading.Thread(target=_bg_upload, daemon=True).start()
     else:
         body['message'] = "Tolong dekatkan uang ke kamera"
         body['valid']   = False
